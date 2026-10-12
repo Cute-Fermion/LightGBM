@@ -1,0 +1,165 @@
+# ============================================================
+# 多因子选股 + 树模型 项目配置文件
+# 所有可调参数集中在此处，代码中不硬编码任何业务参数
+# ============================================================
+
+# ----- 项目路径 -----
+paths:
+  # 原始数据存储目录（从 tushare/akshare 拉取后保存）
+  raw_data: "data/raw"
+  # 处理后数据存储目录
+  processed_data: "data/processed"
+  # 图表输出目录
+  figures: "outputs/figures"
+  # 回测结果输出目录
+  results: "outputs/results"
+
+# ----- Tushare 数据源配置 -----
+tushare:
+  # 每分钟最大请求数（学生权限 200 次/分钟，留 10% 安全余量）
+  rate_limit_per_min: 180
+  # 单次请求失败后的重试次数
+  max_retries: 3
+  # 重试等待时间（秒）
+  retry_wait: 5
+
+# ----- 数据获取配置 -----
+data:
+  # 股票池: "hs300" 或 "zz500"
+  universe: "hs300"
+  # 数据时间范围
+  start_date: "2018-01-01"
+  end_date: "2023-12-31"
+  # 剔除上市不足 N 日的股票
+  min_list_days: 60
+  # 财务数据发布日延迟假设（天数）
+  # 年报(报告期12-31) -> 假设次年4-30可用，延迟约120天
+  # 半年报(报告期6-30) -> 假设8-31可用，延迟约60天
+  # Q1(报告期3-31) -> 假设4-30可用，延迟约30天
+  # Q3(报告期9-30) -> 假设10-31可用，延迟约30天
+  financial_report_delay:
+    annual: 120       # 年报延迟天数
+    semi_annual: 60   # 半年报延迟天数
+    q1: 30            # 一季报延迟天数
+    q3: 30            # 三季报延迟天数
+
+# ----- 因子配置 -----
+factors:
+  # 动量因子窗口期
+  momentum_windows: [5, 10, 20, 60]
+  # 52周高点距离的回望期
+  high_52w_window: 252
+  # 反转因子窗口期
+  reversal_windows: [1, 5]
+  # 波动率窗口期
+  volatility_window: 20
+  # ATR 窗口期
+  atr_window: 14
+  # 量价相关性窗口期
+  volume_price_corr_window: 20
+  # 成交量变化率的短/长窗口
+  volume_change_short: 5
+  volume_change_long: 20
+  # 换手率均值窗口期
+  turnover_window: 20
+
+  # 因子处理
+  processing:
+    # 去极值方法: "mad" (中位数绝对偏差)
+    winsorize_method: "mad"
+    # MAD 倍数阈值
+    winsorize_n: 3.0
+    # 标准化方法: "zscore" 或 "rank"
+    normalize_method: "zscore"
+    # 缺失比例超过此值的因子剔除
+    max_missing_ratio: 0.5
+
+# ----- 标签配置 -----
+labels:
+  # 前瞻收益天数（与调仓频率对齐，20日≈月度）
+  forward_days: 20
+
+# ----- 时间序列划分配置 -----
+split:
+  # 训练窗口长度（交易日）
+  train_window: 756    # 约3年
+  # 预测窗口长度（交易日）
+  predict_window: 20   # 约1个月
+  # 滚动步长（交易日）
+  step: 20             # 每月滚动一次
+
+# ----- 模型配置 -----
+models:
+  # 线性回归基线
+  linear_regression:
+    enabled: true
+
+  # 随机森林
+  random_forest:
+    enabled: true
+    params:
+      n_estimators: 300
+      max_depth: 8
+      min_samples_leaf: 50
+      n_jobs: -1
+      random_state: 42
+
+  # XGBoost
+  xgboost:
+    enabled: true
+    params:
+      n_estimators: 500
+      max_depth: 5
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_lambda: 1.0
+      reg_alpha: 0.0
+      random_state: 42
+      n_jobs: -1
+    # 早停参数
+    early_stopping_rounds: 50
+
+  # LightGBM
+  lightgbm:
+    enabled: true
+    params:
+      n_estimators: 500
+      num_leaves: 31
+      max_depth: 5
+      learning_rate: 0.05
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_lambda: 1.0
+      reg_alpha: 0.0
+      random_state: 42
+      n_jobs: -1
+    early_stopping_rounds: 50
+
+# ----- 回测配置 -----
+backtest:
+  # 分组数量
+  n_groups: 5
+  # 是否只做多（A股做空困难）
+  long_only: true
+  # 加权方式: "equal" 或 "market_cap"
+  weight_method: "equal"
+  # 交易成本
+  commission_rate: 0.0003    # 佣金：买卖各万三
+  stamp_tax_rate: 0.0005     # 印花税：卖出万五（2023年8月后）
+  slippage_rate: 0.001       # 滑点：千一
+  # 调仓频率（交易日）
+  rebalance_days: 20
+
+# ----- 评估配置 -----
+evaluation:
+  # 无风险年化收益率（用于计算夏普）
+  risk_free_rate: 0.025
+  # IC 衰减测试的持有期列表
+  ic_decay_periods: [1, 5, 10, 20]
+
+# ----- 随机种子 -----
+random_seed: 42
+
+# ----- 日志级别 -----
+log_level: "INFO"

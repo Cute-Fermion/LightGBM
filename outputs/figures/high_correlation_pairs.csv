@@ -1,0 +1,10 @@
+factor_1,factor_2,correlation
+mom_20d_std,vol_20d,1.0000000000000002
+mom_5d,rev_5d,1.0
+vol_20d,atr_14d,0.8833493215737321
+mom_20d_std,atr_14d,0.883349321573732
+roe,roa,0.8720998915402877
+mom_20d_std,down_vol_20d,0.7929951106659903
+vol_20d,down_vol_20d,0.7929951106659902
+atr_14d,down_vol_20d,0.726346702396472
+debt_ratio,current_ratio,-0.7672814384123406
