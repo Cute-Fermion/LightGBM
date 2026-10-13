@@ -172,7 +172,7 @@ def calc_group_returns(
                         # 每日等权平均收益
                         daily_avg = group_ret.groupby(level="date").mean()
                         # 持有期总收益
-                        period_return = daily_avg.sum()
+                        period_return = (1 + daily_avg).prod() - 1
                     else:
                         period_return = 0.0
                 else:
@@ -274,7 +274,8 @@ def run_backtest(config: dict, logger) -> Dict[str, pd.DataFrame]:
     """
     proc_path = get_data_path(config, "processed")
     pred_path = get_output_path(config, "results") / "predictions"
-    output_path = get_output_path(config, "results")
+    output_path = get_output_path(config, "results") / "backtest"
+    ensure_dir(output_path)
 
     # 加载市场数据
     market_data = load_dataframe(proc_path / "market_data.parquet", logger)
@@ -313,10 +314,10 @@ def run_backtest(config: dict, logger) -> Dict[str, pd.DataFrame]:
 
         # 打印简要结果
         if "long_only_top" in backtest_result.columns:
-            total_return = backtest_result["long_only_top"].sum()
+            total_return = (1 + backtest_result["long_only_top"]).prod() - 1
             logger.info(f"  {model_name} Top 组总收益: {total_return:.2%}")
         if "long_short" in backtest_result.columns:
-            total_return = backtest_result["long_short"].sum()
+            total_return = (1 + backtest_result["long_short"]).prod() - 1
             logger.info(f"  {model_name} 多空总收益: {total_return:.2%}")
 
     return results

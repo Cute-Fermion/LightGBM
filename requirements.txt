@@ -1,6 +1,6 @@
 # 数据获取
 akshare>=1.10.0
-tushare
+tushare>=1.4.29
 
 # 数据处理
 pandas>=1.5.0
@@ -25,4 +25,4 @@ shap>=0.41.0
 tqdm>=4.64.0
 joblib>=1.2.0
 pyyaml>=6.0
-dotenv
+dotenv>=0.9.9

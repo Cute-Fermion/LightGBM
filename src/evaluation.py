@@ -374,7 +374,9 @@ def run_evaluation(config: dict, logger) -> pd.DataFrame:
     """
     proc_path = get_data_path(config, "processed")
     pred_path = get_output_path(config, "results") / "predictions"
-    output_path = get_output_path(config, "results")
+    back_path =  get_output_path(config, "results") / "backtest"
+    output_path = get_output_path(config, "results") / "evaluation"
+    ensure_dir(output_path)
 
     # 加载标签数据
     labels = load_dataframe(proc_path / "labels.parquet", logger)
@@ -390,7 +392,7 @@ def run_evaluation(config: dict, logger) -> pd.DataFrame:
         predictions = load_dataframe(pred_file, logger)
 
         # 加载回测结果
-        backtest_file = output_path / f"backtest_{model_name}.parquet"
+        backtest_file = back_path / f"backtest_{model_name}.parquet"
         if backtest_file.exists():
             backtest_result = load_dataframe(backtest_file, logger)
         else:

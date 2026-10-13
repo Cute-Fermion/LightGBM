@@ -243,6 +243,7 @@ def run_shap_analysis(
 
 def analyze_factor_correlation(
     factors: pd.DataFrame,
+    csv_dir: Path,
     output_dir: Path,
     logger=None
 ):
@@ -306,7 +307,7 @@ def analyze_factor_correlation(
                 logger.info(f"    {row['factor_1']} <-> {row['factor_2']}: {row['correlation']:.3f}")
 
         # 保存
-        high_corr_df.to_csv(output_dir / "high_correlation_pairs.csv", index=False)
+        high_corr_df.to_csv(csv_dir / "high_correlation_pairs.csv", index=False)
 
     return corr_matrix
 
@@ -327,7 +328,9 @@ def run_analysis(config: dict, logger):
 
     proc_path = get_data_path(config, "processed")
     model_dir = get_output_path(config, "results") / "models"
+    csv_dir = get_output_path(config, "results") / "analysis"
     output_dir = get_output_path(config, "figures")
+    ensure_dir(csv_dir)
     ensure_dir(output_dir)
 
     # 加载因子数据（用于相关性分析）
@@ -336,7 +339,7 @@ def run_analysis(config: dict, logger):
 
     # 因子相关性分析（全局）
     logger.info("\n分析因子相关性...")
-    analyze_factor_correlation(factors, output_dir, logger)
+    analyze_factor_correlation(factors, csv_dir, output_dir, logger)
 
     # 对每个模型做特征重要性和 SHAP 分析
     model_files = list(model_dir.glob("*.pkl"))
@@ -372,7 +375,7 @@ def run_analysis(config: dict, logger):
             plot_feature_importance(importance, model_name, output_dir, logger=logger)
 
             # 保存特征重要性
-            importance.to_csv(output_dir / f"{model_name}_feature_importance.csv")
+            importance.to_csv(csv_dir / f"{model_name}_feature_importance.csv")
             logger.info(f"  Top 5 特征:")
             for feat, val in importance.head(5).items():
                 logger.info(f"    {feat}: {val:.4f}")

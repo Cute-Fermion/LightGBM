@@ -1057,7 +1057,7 @@ def _download_financial_tushare(
                     start_date=config["data"]["start_date"].replace("-", ""),
                     end_date=config["data"]["end_date"].replace("-", ""),
                     fields=(
-                        'ts_code,ann_date,end_date,report_type,comp_type,'
+                        'ts_code,ann_date,end_date,report_type,comp_type,update_flag,'
                         'roe_dt,roa,grossprofit_margin,netprofit_margin,'
                         'debt_to_assets,current_ratio,or_yoy'
                     )
@@ -1079,6 +1079,11 @@ def _download_financial_tushare(
                     df['code'] = code
                     df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce')
 
+                    # 只保留每只股票 report_date 最新的那条记录
+                    df = df.sort_values('report_date').drop_duplicates(
+                        subset=['code', 'report_date'], keep='last'
+                    )
+                    df = df.sort_values('report_date').groupby('code', as_index=False).tail(1)
 
                     all_data.append(df)
                     _safe_write_progress(progress_path, code)
@@ -1089,10 +1094,12 @@ def _download_financial_tushare(
 
         if all_data:
             new_df = pd.concat(all_data, ignore_index=True)
-            if existing_data is not None and len(existing_data) > 0:
+            if existing_data is not None and len(existing_data) > 0 :
                 result = pd.concat([existing_data, new_df], ignore_index=True)
                 result = result.drop_duplicates()
-            else:
+                # 合并后，每只股票仍只保留 report_date 最新的一条
+                result = result.sort_values('report_date').groupby('code', as_index=False).tail(1)
+            else :
                 result = new_df
 
             logger.info(f"[tushare] 财务数据: {len(result)} 条记录")
