@@ -25,7 +25,8 @@ from typing import Dict
 
 from utils import (
     load_config, setup_logger, PROJECT_ROOT,
-    get_data_path, save_dataframe, load_dataframe
+    get_data_path, save_dataframe, load_dataframe,
+    init_run
 )
 
 
@@ -199,8 +200,8 @@ def calc_reversal_factors(data: pd.DataFrame, config: dict, logger) -> pd.DataFr
     # 1 日反转
     factors["rev_1d"] = _pct_change_by_group(close, 1, idx)
 
-    # 5 日反转
-    factors["rev_5d"] = _pct_change_by_group(close, 5, idx)
+    # # 5 日反转（该因子与 mom_5d 重复，已删去）
+    # factors["rev_5d"] = _pct_change_by_group(close, 5, idx)
 
     logger.info(f"  反转因子计算完成，共 {len(factors.columns)} 个因子")
     return factors
@@ -242,23 +243,23 @@ def calc_volatility_factors(data: pd.DataFrame, config: dict, logger) -> pd.Data
     # 日收益率
     daily_ret = _pct_change_by_group(close, 1, idx)
 
-    # 1. 20 日已实现波动率（年化）
-    # 先算日标准差，再年化
-    daily_std = _rolling_std_by_group(daily_ret, vol_window, idx)
-    factors["vol_20d"] = daily_std * np.sqrt(252)
+    # # 1. 20 日已实现波动率（年化）（该因子与 mom_20d_std 重复，已删去）
+    # # 先算日标准差，再年化
+    # daily_std = _rolling_std_by_group(daily_ret, vol_window, idx)
+    # factors["vol_20d"] = daily_std * np.sqrt(252)
 
-    # 2. ATR（Average True Range）/ 收盘价，归一化
-    # True Range = max(high-low, |high-prev_close|, |low-prev_close|)
-    prev_close = close.groupby(level="code").shift(1)
-    tr1 = high - low
-    tr2 = (high - prev_close).abs()
-    tr3 = (low - prev_close).abs()
-    true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-
-    # 14 日 ATR
-    atr = _rolling_mean_by_group(true_range, atr_window, idx)
-    # 用收盘价归一化，使其具有横截面可比性
-    factors["atr_14d"] = atr / close
+    # # 2. ATR（Average True Range）/ 收盘价，归一化（该因子与 mom_20d_std 高度相关，已删去）
+    # # True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+    # prev_close = close.groupby(level="code").shift(1)
+    # tr1 = high - low
+    # tr2 = (high - prev_close).abs()
+    # tr3 = (low - prev_close).abs()
+    # true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    #
+    # # 14 日 ATR
+    # atr = _rolling_mean_by_group(true_range, atr_window, idx)
+    # # 用收盘价归一化，使其具有横截面可比性
+    # factors["atr_14d"] = atr / close
 
     # 3. 下行波动率：只考虑负收益日的标准差
     # 将正收益替换为 0，只保留亏损部分
@@ -577,9 +578,11 @@ def main():
     """命令行入口"""
     parser = argparse.ArgumentParser(description="因子计算")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="配置文件路径")
+    parser.add_argument("--run_id", type=int, default=None, help="运行序号（默认自动递增）")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    run_id = init_run(config, args.run_id)
     logger = setup_logger("features", config.get("log_level", "INFO"))
 
     logger.info("=" * 60)

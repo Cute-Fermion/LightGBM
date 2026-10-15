@@ -26,7 +26,8 @@ from scipy.stats import spearmanr
 
 from utils import (
     load_config, setup_logger, PROJECT_ROOT,
-    get_output_path, get_data_path, ensure_dir, save_dataframe, load_dataframe
+    get_output_path, get_data_path, ensure_dir, save_dataframe, load_dataframe,
+    init_run
 )
 
 
@@ -322,6 +323,18 @@ def evaluate_model(
     risk_free = config["evaluation"]["risk_free_rate"]
     n_groups = config["backtest"]["n_groups"]
 
+    # ----- 推算实际调仓频率 -----
+    # backtest 每行是一个调仓期的累计收益，不是日收益
+    # 需要根据日期索引计算每年有多少个调仓期
+    bt_dates = backtest_result.index.sort_values()
+    if len(bt_dates) >= 2:
+        avg_interval = (bt_dates[-1] - bt_dates[0]).days / (len(bt_dates) - 1)
+        # A 股每年约 242 个交易日（去除周末和节假日），用实际日历天数 365 换算
+        periods_per_year = round(252 / avg_interval) if avg_interval > 0 else 12
+    else:
+        periods_per_year = 12
+    logger.info(f"  回测调仓期数: {len(bt_dates)}, 推算 periods_per_year={periods_per_year}")
+
     results = {"model_name": model_name}
 
     # ----- IC 指标 -----
@@ -336,21 +349,21 @@ def evaluate_model(
     if "long_only_top" in backtest_result.columns:
         logger.info("  计算 Top 组收益指标...")
         top_returns = backtest_result["long_only_top"]
-        results["annual_return_top"] = calc_annual_return(top_returns)
-        results["annual_vol_top"] = calc_annual_volatility(top_returns)
-        results["sharpe_top"] = calc_sharpe_ratio(top_returns, risk_free)
+        results["annual_return_top"] = calc_annual_return(top_returns, periods_per_year)
+        results["annual_vol_top"] = calc_annual_volatility(top_returns, periods_per_year)
+        results["sharpe_top"] = calc_sharpe_ratio(top_returns, risk_free, periods_per_year)
         results["max_drawdown_top"] = calc_max_drawdown(top_returns)
-        results["calmar_top"] = calc_calmar_ratio(top_returns)
+        results["calmar_top"] = calc_calmar_ratio(top_returns, periods_per_year)
 
     # ----- 收益风险指标（多空） -----
     if "long_short" in backtest_result.columns:
         logger.info("  计算多空组合收益指标...")
         ls_returns = backtest_result["long_short"]
-        results["annual_return_ls"] = calc_annual_return(ls_returns)
-        results["annual_vol_ls"] = calc_annual_volatility(ls_returns)
-        results["sharpe_ls"] = calc_sharpe_ratio(ls_returns, risk_free)
+        results["annual_return_ls"] = calc_annual_return(ls_returns, periods_per_year)
+        results["annual_vol_ls"] = calc_annual_volatility(ls_returns, periods_per_year)
+        results["sharpe_ls"] = calc_sharpe_ratio(ls_returns, risk_free, periods_per_year)
         results["max_drawdown_ls"] = calc_max_drawdown(ls_returns)
-        results["calmar_ls"] = calc_calmar_ratio(ls_returns)
+        results["calmar_ls"] = calc_calmar_ratio(ls_returns, periods_per_year)
 
     # ----- 分组单调性 -----
     logger.info("  检验分组单调性...")
@@ -436,9 +449,11 @@ def main():
     """命令行入口"""
     parser = argparse.ArgumentParser(description="模型评估")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="配置文件路径")
+    parser.add_argument("--run_id", type=int, default=None, help="运行序号（默认自动递增）")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    run_id = init_run(config, args.run_id)
     logger = setup_logger("evaluation", config.get("log_level", "INFO"))
 
     logger.info("=" * 60)

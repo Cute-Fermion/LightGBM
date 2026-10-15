@@ -46,7 +46,8 @@ except ImportError:
 
 from utils import (
     load_config, setup_logger, PROJECT_ROOT,
-    get_data_path, get_output_path, ensure_dir, save_dataframe, load_dataframe
+    get_data_path, get_output_path, ensure_dir, save_dataframe, load_dataframe,
+    init_run
 )
 from split import run_split
 
@@ -434,9 +435,11 @@ def main():
     """命令行入口"""
     parser = argparse.ArgumentParser(description="模型训练与预测")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="配置文件路径")
+    parser.add_argument("--run_id", type=int, default=None, help="运行序号（默认自动递增）")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    run_id = init_run(config, args.run_id)
     logger = setup_logger("models", config.get("log_level", "INFO"))
 
     logger.info("=" * 60)

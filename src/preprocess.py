@@ -30,7 +30,8 @@ from typing import Optional
 
 from utils import (
     load_config, setup_logger, PROJECT_ROOT,
-    get_data_path, save_dataframe, load_dataframe
+    get_data_path, save_dataframe, load_dataframe,
+    init_run
 )
 
 
@@ -362,9 +363,11 @@ def main():
     """命令行入口"""
     parser = argparse.ArgumentParser(description="因子预处理")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="配置文件路径")
+    parser.add_argument("--run_id", type=int, default=None, help="运行序号（默认自动递增）")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    run_id = init_run(config, args.run_id)
     logger = setup_logger("preprocess", config.get("log_level", "INFO"))
 
     logger.info("=" * 60)

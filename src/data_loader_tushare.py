@@ -42,7 +42,8 @@ import akshare as ak
 
 from utils import (
     load_config, setup_logger, PROJECT_ROOT,
-    get_data_path, ensure_dir, save_dataframe, load_dataframe
+    get_data_path, ensure_dir, save_dataframe, load_dataframe,
+    init_run
 )
 
 
@@ -1527,6 +1528,33 @@ def clean_data(config: dict, logger) -> Dict[str, pd.DataFrame]:
 
 
 # ============================================================
+# 第七点五部分：流水线入口（供 pipeline.py 调用）
+# ============================================================
+
+def run_data_pipeline(config: dict, logger, skip_download: bool = False):
+    """
+    数据获取与清洗的完整流程（供 pipeline.py 统一调用）。
+
+    参数:
+        config: 配置字典
+        logger: 日志记录器
+        skip_download: 是否跳过下载，只做数据清洗
+    """
+    if not skip_download:
+        constituents = get_index_constituents(config, logger)
+        stock_codes = constituents["code"].tolist()
+        download_daily_prices(config, stock_codes, logger)
+        download_valuation_indicators(config, stock_codes, logger)
+        download_financial_data(config, stock_codes, logger)
+        download_index_data(config, logger)
+        download_industry_classification(config, stock_codes, logger)
+
+    logger.info("开始数据清洗...")
+    clean_data(config, logger)
+    logger.info("数据获取与清洗完成！")
+
+
+# ============================================================
 # 第八部分：主函数（命令行入口）
 # ============================================================
 
@@ -1543,11 +1571,15 @@ def main():
                         help="配置文件路径")
     parser.add_argument("--skip-download", action="store_true",
                         help="跳过下载，只做数据清洗")
+    parser.add_argument("--run_id", type=int, default=None,
+                        help="运行序号（默认自动递增）")
     args = parser.parse_args()
 
     config = load_config(args.config)
+    run_id = init_run(config, args.run_id)
     logger = setup_logger("data_loader_tushare", config.get("log_level", "INFO"))
 
+    logger.info(f"运行 ID: {run_id}")
     logger.info("=" * 60)
     logger.info("多因子选股项目 - 数据获取与清洗（Tushare 版）")
     logger.info("=" * 60)

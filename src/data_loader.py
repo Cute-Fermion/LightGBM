@@ -35,7 +35,8 @@ from tqdm import tqdm
 # 导入项目工具函数
 from utils import (
     load_config, setup_logger, PROJECT_ROOT,
-    get_data_path, ensure_dir, save_dataframe, load_dataframe
+    get_data_path, ensure_dir, save_dataframe, load_dataframe,
+    init_run
 )
 
 # 线程锁，用于安全写入进度文件
@@ -1010,10 +1011,12 @@ def main():
     parser = argparse.ArgumentParser(description="数据获取与清洗")
     parser.add_argument("--config", type=str, default="config/config.yaml", help="配置文件路径")
     parser.add_argument("--skip-download", action="store_true", help="跳过下载，只做数据清洗")
+    parser.add_argument("--run_id", type=int, default=None, help="运行序号（默认自动递增）")
     args = parser.parse_args()
 
     # 加载配置
     config = load_config(args.config)
+    run_id = init_run(config, args.run_id)
     logger = setup_logger("data_loader", config.get("log_level", "INFO"))
 
     logger.info("=" * 60)
