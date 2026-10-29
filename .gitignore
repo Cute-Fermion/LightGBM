@@ -1,1 +1,4 @@
 /.env
+/outputs
+/.qoder
+/.ipynb_checkpoints

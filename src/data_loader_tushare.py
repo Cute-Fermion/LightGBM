@@ -1060,7 +1060,8 @@ def _download_financial_tushare(
                     fields=(
                         'ts_code,ann_date,end_date,report_type,comp_type,update_flag,'
                         'roe_dt,roa,grossprofit_margin,netprofit_margin,'
-                        'debt_to_assets,current_ratio,or_yoy'
+                        'debt_to_assets,current_ratio,or_yoy,'
+                        'ocfps,roe_yoy,dt_netprofit_yoy'
                     )
                 )
 
@@ -1075,16 +1076,18 @@ def _download_financial_tushare(
                         'debt_to_assets': 'debt_ratio',
                         'current_ratio': 'current_ratio',
                         'or_yoy': 'revenue_growth',  # 营收同比增速
+                        'ocfps': 'ocfps',              # 每股经营现金流
+                        'roe_yoy': 'roe_yoy',          # ROE 同比变化
+                        'dt_netprofit_yoy': 'dt_netprofit_yoy',  # 扣非净利润同比
                     })
 
                     df['code'] = code
                     df['report_date'] = pd.to_datetime(df['report_date'], errors='coerce')
 
-                    # 只保留每只股票 report_date 最新的那条记录
+                    # 同一 (code, report_date) 可能因 report_type 不同而重复，去重保留最新
                     df = df.sort_values('report_date').drop_duplicates(
                         subset=['code', 'report_date'], keep='last'
                     )
-                    df = df.sort_values('report_date').groupby('code', as_index=False).tail(1)
 
                     all_data.append(df)
                     _safe_write_progress(progress_path, code)
@@ -1098,8 +1101,6 @@ def _download_financial_tushare(
             if existing_data is not None and len(existing_data) > 0 :
                 result = pd.concat([existing_data, new_df], ignore_index=True)
                 result = result.drop_duplicates()
-                # 合并后，每只股票仍只保留 report_date 最新的一条
-                result = result.sort_values('report_date').groupby('code', as_index=False).tail(1)
             else :
                 result = new_df
 
@@ -1528,6 +1529,305 @@ def clean_data(config: dict, logger) -> Dict[str, pd.DataFrame]:
 
 
 # ============================================================
+# 第七点三部分：北向资金持股与分析师评级下载
+# ============================================================
+
+def download_northbound_data(
+    config: dict,
+    stock_codes: List[str],
+    logger
+) -> pd.DataFrame:
+    """
+    下载北向资金（沪深港通）持股数据。
+
+    使用 hk_hold 接口按日期范围获取，提取 ratio（持股占比）字段。
+    数据为日频，保存为 (date, code) MultiIndex 格式。
+
+    参数:
+        config: 配置字典
+        stock_codes: 目标股票代码列表
+        logger: 日志记录器
+
+    返回:
+        DataFrame，MultiIndex 为 (date, code)，包含 northbound_ratio 列
+    """
+    save_path = get_data_path(config, "raw") / "northbound_data.parquet"
+
+    if save_path.exists():
+        logger.info(f"从本地加载北向资金数据: {save_path}")
+        return load_dataframe(save_path, logger)
+
+    ensure_dir(get_data_path(config, "raw"))
+
+    pro = _init_tushare(config, logger)
+    if pro is None:
+        logger.warning("Tushare 不可用，无法获取北向资金数据")
+        return pd.DataFrame()
+
+    try:
+        ts_code_set = set(_code_to_ts_code(c) for c in stock_codes)
+        start_date = config["data"]["start_date"].replace("-", "")
+        end_date = config["data"]["end_date"].replace("-", "")
+
+        # 按 2 周分块（~300 只股票 × 14 天 ≈ 4200，接近 API 上限）
+        date_chunks = pd.date_range(start=start_date, end=end_date, freq="2W")
+        date_ranges = []
+        for i in range(len(date_chunks)):
+            chunk_start = date_chunks[i].strftime("%Y%m%d")
+            chunk_end = (
+                (date_chunks[i + 1] - pd.Timedelta(days=1)).strftime("%Y%m%d")
+                if i < len(date_chunks) - 1
+                else end_date
+            )
+            date_ranges.append((chunk_start, chunk_end))
+
+        all_data = []
+        logger.info(f"[tushare] 开始下载北向资金持股数据 ({len(date_ranges)} 个时间段)...")
+
+        for s_date, e_date in tqdm(date_ranges, desc="[tushare] 下载北向资金"):
+            for exchange in ["SH", "SZ"]:
+                try:
+                    df = _ts_request(
+                        pro.hk_hold,
+                        exchange=exchange,
+                        start_date=s_date,
+                        end_date=e_date
+                    )
+                    if df is None or len(df) == 0:
+                        continue
+
+                    df = df[df['ts_code'].isin(ts_code_set)]
+                    if len(df) == 0:
+                        continue
+
+                    df = df[['ts_code', 'trade_date', 'ratio']].copy()
+                    df['code'] = df['ts_code'].apply(_ts_code_to_code)
+                    df['date'] = pd.to_datetime(df['trade_date'])
+                    df = df.rename(columns={'ratio': 'northbound_ratio'})
+                    all_data.append(df[['date', 'code', 'northbound_ratio']])
+
+                except Exception as e:
+                    logger.debug(f"  下载北向资金 {exchange} {s_date}~{e_date} 失败: {e}")
+                    continue
+
+        if not all_data:
+            logger.warning("未获取到北向资金数据")
+            return pd.DataFrame()
+
+        result = pd.concat(all_data, ignore_index=True)
+        result = result.drop_duplicates(subset=['date', 'code'])
+        result = result.set_index(['date', 'code']).sort_index()
+
+        n_stocks = result.index.get_level_values('code').nunique()
+        n_dates = result.index.get_level_values('date').nunique()
+        logger.info(
+            f"[tushare] 北向资金数据: {len(result)} 条，"
+            f"覆盖 {n_stocks} 只股票，{n_dates} 个交易日"
+        )
+
+        save_dataframe(result, save_path, logger)
+        return result
+
+    except Exception as e:
+        logger.error(f"[tushare] 北向资金数据下载异常: {e}")
+        return pd.DataFrame()
+
+
+def download_consensus_ratings(
+    config: dict,
+    stock_codes: List[str],
+    logger
+) -> pd.DataFrame:
+    """
+    下载分析师一致评级数据。
+
+    使用 report_rc 接口获取券商研报评级，将评级文本映射为数值分数后
+    按 (stock, date) 取均值，得到每日一致评级分数。
+
+    注意:
+        report_rc 接口限制 10 次/天，72 个月度分块需约 7 天完成。
+        支持断点续传：已下载的月份会记录在进度文件中，下次运行时跳过。
+
+    评级映射:
+        买入/强烈推荐/推荐/BUY = 5
+        增持/优于大市/OVERWEIGHT = 4
+        中性/观望 = 3
+        减持 = 2
+        卖出 = 1
+
+    参数:
+        config: 配置字典
+        stock_codes: 目标股票代码列表
+        logger: 日志记录器
+
+    返回:
+        DataFrame，MultiIndex 为 (date, code)，包含 consensus_rating 列
+    """
+    save_path = get_data_path(config, "raw") / "consensus_ratings.parquet"
+    progress_path = get_data_path(config, "raw") / "_consensus_download_progress.txt"
+
+    if save_path.exists():
+        existing = load_dataframe(save_path, logger)
+        if existing is not None and len(existing) > 0:
+            # 检查是否已覆盖全部时间范围
+            n_dates = existing.index.get_level_values("date").nunique()
+            if n_dates > 100:
+                logger.info(f"从本地加载分析师评级数据: {save_path} ({len(existing)} 条)")
+                return existing
+            else:
+                logger.info(f"本地数据不完整（{n_dates} 天），尝试续传...")
+
+    ensure_dir(get_data_path(config, "raw"))
+
+    pro = _init_tushare(config, logger)
+    if pro is None:
+        logger.warning("Tushare 不可用，无法获取分析师评级数据")
+        return pd.DataFrame()
+
+    try:
+        ts_code_set = set(_code_to_ts_code(c) for c in stock_codes)
+        start_date = config["data"]["start_date"].replace("-", "")
+        end_date = config["data"]["end_date"].replace("-", "")
+
+        # 评级文本 → 数值映射
+        rating_map = {
+            '买入': 5, '强烈推荐': 5, '推荐': 5, 'BUY': 5,
+            '增持': 4, '优于大市': 4, 'OVERWEIGHT': 4,
+            '中性': 3, '观望': 3, 'NEUTRAL': 3, 'HOLD': 3,
+            '减持': 2, 'REDUCE': 2,
+            '卖出': 1, 'SELL': 1,
+        }
+
+        # 按月分块
+        date_chunks = pd.date_range(start=start_date, end=end_date, freq="MS")
+        date_ranges = []
+        for i in range(len(date_chunks)):
+            chunk_start = date_chunks[i].strftime("%Y%m%d")
+            chunk_end = (
+                (date_chunks[i + 1] - pd.Timedelta(days=1)).strftime("%Y%m%d")
+                if i < len(date_chunks) - 1
+                else end_date
+            )
+            date_ranges.append((chunk_start, chunk_end))
+
+        # 读取进度（已完成的月份）
+        downloaded_chunks = set()
+        if progress_path.exists():
+            with open(progress_path, "r") as f:
+                downloaded_chunks = set(line.strip() for line in f if line.strip())
+
+        # 加载已有数据（用于增量合并）
+        existing_data = None
+        if save_path.exists():
+            try:
+                existing_data = load_dataframe(save_path, logger)
+            except Exception:
+                pass
+
+        remaining = [(s, e) for s, e in date_ranges if f"{s}_{e}" not in downloaded_chunks]
+        if downloaded_chunks:
+            logger.info(f"已完成 {len(downloaded_chunks)} 个月，剩余 {len(remaining)} 个月")
+
+        if not remaining:
+            if existing_data is not None and len(existing_data) > 0:
+                return existing_data
+
+        # report_rc 限制 10 次/天
+        DAILY_LIMIT = 9  # 留 1 次安全余量
+        daily_calls = 0
+
+        all_data = []
+        if existing_data is not None and len(existing_data) > 0:
+            all_data.append(existing_data.reset_index())
+
+        rate_limited = False
+        logger.info(f"[tushare] 开始下载分析师评级数据 ({len(remaining)} 个待下载时间段)...")
+        logger.info(f"  注意: report_rc 限制 10 次/天，本次最多执行 {DAILY_LIMIT} 次调用")
+
+        for s_date, e_date in tqdm(remaining, desc="[tushare] 下载评级"):
+            if daily_calls >= DAILY_LIMIT:
+                rate_limited = True
+                logger.warning(
+                    f"  已达今日调用上限 ({daily_calls} 次)，"
+                    f"剩余 {len(remaining) - daily_calls} 个月度分块将在下次运行时续传"
+                )
+                break
+
+            try:
+                df = _ts_request(
+                    pro.report_rc,
+                    start_date=s_date,
+                    end_date=e_date,
+                    fields='ts_code,report_date,rating'
+                )
+                daily_calls += 1
+
+                if df is None or len(df) == 0:
+                    _safe_write_progress(progress_path, f"{s_date}_{e_date}")
+                    continue
+
+                # 映射评级为数值
+                df['rating_score'] = df['rating'].map(rating_map)
+                df = df.dropna(subset=['rating_score'])
+
+                # 过滤目标股票
+                df = df[df['ts_code'].isin(ts_code_set)]
+                if len(df) == 0:
+                    _safe_write_progress(progress_path, f"{s_date}_{e_date}")
+                    continue
+
+                df['code'] = df['ts_code'].apply(_ts_code_to_code)
+                df['date'] = pd.to_datetime(df['report_date'])
+
+                # 按 (stock, date) 取均值 → 一致评级
+                consensus = df.groupby(['code', 'date'])['rating_score'].mean().reset_index()
+                consensus = consensus.rename(columns={'rating_score': 'consensus_rating'})
+                all_data.append(consensus)
+                _safe_write_progress(progress_path, f"{s_date}_{e_date}")
+
+            except Exception as e:
+                err_msg = str(e).lower()
+                if 'freq' in err_msg or 'limit' in err_msg or '频次' in err_msg or '超限' in err_msg:
+                    logger.warning(f"  触发频率限制，今日下载停止。已完成 {daily_calls} 次调用")
+                    rate_limited = True
+                    break
+                logger.debug(f"  下载评级 {s_date}~{e_date} 失败: {e}")
+                continue
+
+        if not all_data:
+            logger.warning("未获取到分析师评级数据")
+            return pd.DataFrame()
+
+        result = pd.concat(all_data, ignore_index=True)
+        result = result.drop_duplicates(subset=['date', 'code'])
+        result = result.set_index(['date', 'code']).sort_index()
+
+        n_stocks = result.index.get_level_values('code').nunique()
+        n_dates = result.index.get_level_values('date').nunique()
+        logger.info(
+            f"[tushare] 分析师评级数据: {len(result)} 条，"
+            f"覆盖 {n_stocks} 只股票，{n_dates} 个交易日"
+        )
+
+        if not rate_limited:
+            # 全部下载完成，清理进度文件
+            save_dataframe(result, save_path, logger)
+            if progress_path.exists():
+                progress_path.unlink()
+            logger.info("分析师评级数据下载完成")
+        else:
+            # 部分完成，保存中间结果
+            save_dataframe(result, save_path, logger)
+            logger.info(f"已保存中间结果（{len(result)} 条），请明天继续运行以补全数据")
+
+        return result
+
+    except Exception as e:
+        logger.error(f"[tushare] 分析师评级数据下载异常: {e}")
+        return pd.DataFrame()
+
+
+# ============================================================
 # 第七点五部分：流水线入口（供 pipeline.py 调用）
 # ============================================================
 
@@ -1548,6 +1848,8 @@ def run_data_pipeline(config: dict, logger, skip_download: bool = False):
         download_financial_data(config, stock_codes, logger)
         download_index_data(config, logger)
         download_industry_classification(config, stock_codes, logger)
+        download_northbound_data(config, stock_codes, logger)
+        download_consensus_ratings(config, stock_codes, logger)
 
     logger.info("开始数据清洗...")
     clean_data(config, logger)
@@ -1604,7 +1906,13 @@ def main():
         # 步骤 6：获取行业分类
         industry = download_industry_classification(config, stock_codes, logger)
 
-    # 步骤 7：数据清洗
+        # 步骤 7：下载北向资金持股数据
+        download_northbound_data(config, stock_codes, logger)
+
+        # 步骤 8：下载分析师一致评级
+        # download_consensus_ratings(config, stock_codes, logger)
+
+    # 步骤 9：数据清洗
     logger.info("开始数据清洗...")
     cleaned = clean_data(config, logger)
 

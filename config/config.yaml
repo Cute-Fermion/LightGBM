@@ -28,8 +28,8 @@ data:
   # 股票池: "hs300" 或 "zz500"
   universe: "hs300"
   # 数据时间范围
-  start_date: "2018-01-01"
-  end_date: "2023-12-31"
+  start_date: "2021-01-01"
+  end_date: "2026-08-31"
   # 剔除上市不足 N 日的股票
   min_list_days: 60
   # 财务数据发布日延迟假设（天数）
@@ -62,6 +62,16 @@ factors:
   volume_change_long: 20
   # 换手率均值窗口期
   turnover_window: 20
+
+  # ----- 新增因子配置 -----
+  # SUE（盈利超预期）：使用 dt_netprofit_yoy（扣非净利润同比）横截面标准化
+  #   无需额外参数，计算逻辑内置于 features.py
+  # ocfps（每股经营现金流）：直接取自 fina_indicator
+  # roe_yoy（ROE同比变化）：直接取自 fina_indicator
+  # northbound_ratio（北向资金持股比例）：直接取自 hk_hold
+  # consensus_rating（分析师一致评级）：report_rc 评级映射后取均值
+  #   评级映射: 买入/强烈推荐=5, 增持/优于大市=4, 中性=3, 减持=2, 卖出=1
+  # 以上因子均为季度/日频数据自动对齐，无额外窗口参数
 
   # 因子处理
   processing:
@@ -96,7 +106,7 @@ models:
 
   # 随机森林
   random_forest:
-    enabled: true
+    enabled: false
     params:
       n_estimators: 300
       max_depth: 8
@@ -125,13 +135,14 @@ models:
     enabled: true
     params:
       n_estimators: 500
-      num_leaves: 31
-      max_depth: 5
-      learning_rate: 0.05
-      subsample: 0.8
-      colsample_bytree: 0.8
-      reg_lambda: 1.0
-      reg_alpha: 0.0
+      num_leaves: 44
+      max_depth: 3
+      learning_rate: 0.1038
+      subsample: 0.7784
+      colsample_bytree: 0.4240
+      reg_lambda: 5.3883
+      reg_alpha: 1.0310
+      min_child_samples: 70
       random_state: 42
       n_jobs: -1
     early_stopping_rounds: 50

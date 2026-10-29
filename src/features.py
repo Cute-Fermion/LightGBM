@@ -1,15 +1,18 @@
 """
 features.py - 因子计算模块
 ===========================
-基于清洗后的行情数据，计算六大类选股因子。
+基于清洗后的行情数据，计算选股因子。
 
 因子类别:
     1. 动量类：中期趋势跟踪（5/10/20/60日收益率、52周高点距离）
-    2. 反转类：短期反转效应（1日/5日收益率，A股短期反转显著）
-    3. 波动类：风险度量（已实现波动率、ATR、下行波动率）
+    2. 反转类：短期反转效应（1日收益率，A股短期反转显著）
+    3. 波动类：风险度量（下行波动率）
     4. 量价类：资金流向（换手率、量比、量价相关性）
     5. 估值类：价值因子（PE/PB/PS倒数、股息率、市值对数）
-    6. 质量类：基本面质量（ROE/ROA/毛利率/净利率/负债率/流动比率）
+    6. 质量类：基本面质量（ROE/ROA/毛利率/净利率/负债率/流动比率/营收增速
+               + 每股经营现金流/ROE同比变化/SUE盈利超预期）
+    7. 另类-北向资金：沪深港通持股占比
+    8. 另类-分析师预期：卖方一致评级
 
 核心原则:
     所有因子计算**只使用 t 时刻及之前的数据**，绝不使用未来信息。
@@ -444,7 +447,11 @@ def calc_quality_factors(
     # 3. 这就是该交易日"可获得的"最新财务数据
 
     # 提取需要的财务指标列
-    quality_cols = ["roe", "roa", "gross_margin", "net_margin", "debt_ratio", "current_ratio", "revenue_growth"]
+    quality_cols = [
+        "roe", "roa", "gross_margin", "net_margin", "debt_ratio",
+        "current_ratio", "revenue_growth",
+        "ocfps", "roe_yoy", "dt_netprofit_yoy",
+    ]
     available_cols = [c for c in quality_cols if c in financial_data.columns]
 
     if not available_cols:
@@ -462,6 +469,9 @@ def calc_quality_factors(
 
     # 只保留有用的列
     fin_subset = financial_data[["code", "publish_date"] + available_cols].copy()
+    fin_subset = fin_subset.dropna(subset=["publish_date"])
+    # 确保 publish_date 为 datetime 类型（tushare 的 ann_date 原始为字符串）
+    fin_subset["publish_date"] = pd.to_datetime(fin_subset["publish_date"], errors="coerce")
     fin_subset = fin_subset.dropna(subset=["publish_date"])
     fin_subset = fin_subset.sort_values(["code", "publish_date"])
 
@@ -508,7 +518,144 @@ def calc_quality_factors(
         if col not in factors.columns:
             factors[col] = np.nan
 
+    # ----- SUE（盈利超预期）-----
+    # 使用 dt_netprofit_yoy（扣非净利润同比变化）作为盈利超前的代理变量
+    # 在"季节性随机游走"模型下，去年同期盈利即为预期，YoY 变化就是 surprise
+    # 横截面标准化使不同时期的 SUE 具有可比性
+    if "dt_netprofit_yoy" in factors.columns:
+        sue_raw = factors["dt_netprofit_yoy"].copy()
+        date_level = factors.index.get_level_values("date")
+        sue_group = sue_raw.groupby(date_level)
+        sue_mean = sue_group.transform("mean")
+        sue_std = sue_group.transform("std")
+        factors["sue"] = np.where(sue_std > 0, (sue_raw - sue_mean) / sue_std, 0.0)
+    else:
+        factors["sue"] = np.nan
+
     logger.info(f"  质量因子计算完成，共 {len(factors.columns)} 个因子")
+    return factors
+
+
+# ============================================================
+# 第七类：北向资金持股比例（另类数据）
+# ============================================================
+
+def calc_northbound_ratio(data: pd.DataFrame, config: dict, logger) -> pd.DataFrame:
+    """
+    计算北向资金（沪深港通）持股比例因子。
+
+    北向资金被视为"聪明资金"，其持股变动包含增量信息。
+    持股比例上升可能预示外资看好，下降则可能预示风险。
+
+    数据来源:
+        data/raw/northbound_data.parquet（由 data_loader_tushare 下载）
+
+    参数:
+        data: 日频市场数据，MultiIndex 为 (date, code)
+        config: 配置字典
+        logger: 日志记录器
+
+    返回:
+        DataFrame，包含 northbound_ratio 列，index 与 data 相同
+    """
+    logger.info("计算北向资金持股比例因子...")
+    idx = data.index
+    factors = pd.DataFrame(index=idx)
+    factors["northbound_ratio"] = np.nan
+
+    raw_path = get_data_path(config, "raw")
+    nb_path = raw_path / "northbound_data.parquet"
+
+    if not nb_path.exists():
+        logger.warning("  北向资金数据不存在，跳过")
+        return factors
+
+    try:
+        nb_data = load_dataframe(nb_path, logger)
+        if nb_data is None or len(nb_data) == 0:
+            logger.warning("  北向资金数据为空，跳过")
+            return factors
+
+        if "northbound_ratio" in nb_data.columns:
+            # 精确匹配
+            common_idx = idx.intersection(nb_data.index)
+            factors.loc[common_idx, "northbound_ratio"] = nb_data.loc[common_idx, "northbound_ratio"]
+
+            # 前向填充：北向持股比例变化缓慢，用最近一个已知值填充缺失日
+            # 先 unstack 成 (date × code) 矩阵，按日期前向填充，再 stack 回去
+            nb_unstacked = nb_data["northbound_ratio"].unstack("code")
+            nb_unstacked = nb_unstacked.reindex(
+                idx.get_level_values("date").unique()
+            ).sort_index()
+            nb_filled = nb_unstacked.ffill(limit=30)  # 最多向前填充 30 天
+            nb_filled = nb_filled.stack()
+            nb_filled.index.names = ["date", "code"]
+
+            common_idx_filled = idx.intersection(nb_filled.index)
+            # 只在精确匹配为 NaN 的位置用填充值补充
+            mask = factors["northbound_ratio"].isna()
+            fill_values = nb_filled.reindex(common_idx_filled)
+            fill_idx = common_idx_filled[mask.reindex(common_idx_filled).fillna(False)]
+            factors.loc[fill_idx, "northbound_ratio"] = fill_values.loc[fill_idx]
+
+        coverage = factors["northbound_ratio"].notna().mean()
+        logger.info(f"  北向持股比例因子完成，非空率 {coverage:.2%}")
+    except Exception as e:
+        logger.warning(f"  加载北向资金数据失败: {e}")
+
+    return factors
+
+
+# ============================================================
+# 第八类：分析师一致评级（另类数据）
+# ============================================================
+
+def calc_consensus_rating(data: pd.DataFrame, config: dict, logger) -> pd.DataFrame:
+    """
+    计算分析师一致评级因子。
+
+    卖方分析师的综合评级反映市场对该股票的专业预期。
+    评级越高（接近 5 = 买入），市场预期越乐观。
+
+    数据来源:
+        data/raw/consensus_ratings.parquet（由 data_loader_tushare 下载）
+        评级映射: 买入/强烈推荐=5, 增持/优于大市=4, 中性=3, 减持=2, 卖出=1
+
+    参数:
+        data: 日频市场数据，MultiIndex 为 (date, code)
+        config: 配置字典
+        logger: 日志记录器
+
+    返回:
+        DataFrame，包含 consensus_rating 列，index 与 data 相同
+    """
+    logger.info("计算分析师一致评级因子...")
+    idx = data.index
+    factors = pd.DataFrame(index=idx)
+    factors["consensus_rating"] = np.nan
+
+    raw_path = get_data_path(config, "raw")
+    cr_path = raw_path / "consensus_ratings.parquet"
+
+    if not cr_path.exists():
+        logger.warning("  分析师评级数据不存在，跳过")
+        return factors
+
+    try:
+        cr_data = load_dataframe(cr_path, logger)
+        if cr_data is None or len(cr_data) == 0:
+            logger.warning("  分析师评级数据为空，跳过")
+            return factors
+
+        if "consensus_rating" in cr_data.columns:
+            common_idx = idx.intersection(cr_data.index)
+            factors.loc[common_idx, "consensus_rating"] = cr_data.loc[common_idx, "consensus_rating"]
+
+        coverage = factors["consensus_rating"].notna().mean()
+        logger.info(f"  分析师一致评级因子完成，非空率 {coverage:.2%}")
+    except Exception as e:
+        logger.warning(f"  加载分析师评级数据失败: {e}")
+
     return factors
 
 
@@ -544,17 +691,22 @@ def compute_all_factors(config: dict, logger) -> pd.DataFrame:
     if (proc_path / "financial_data.parquet").exists():
         financial_data = load_dataframe(proc_path / "financial_data.parquet", logger)
 
-    # 分别计算六大类因子
+    # 分别计算因子
     momentum = calc_momentum_factors(market_data, config, logger)
     reversal = calc_reversal_factors(market_data, config, logger)
     volatility = calc_volatility_factors(market_data, config, logger)
     vol_price = calc_volume_price_factors(market_data, config, logger)
     valuation = calc_valuation_factors(market_data, config, logger)
     quality = calc_quality_factors(market_data, financial_data, config, logger)
+    northbound = calc_northbound_ratio(market_data, config, logger)
+    consensus = calc_consensus_rating(market_data, config, logger)
 
     # 合并所有因子
     logger.info("合并所有因子...")
-    all_factors = pd.concat([momentum, reversal, volatility, vol_price, valuation, quality], axis=1)
+    all_factors = pd.concat([
+        momentum, reversal, volatility, vol_price, valuation, quality,
+        northbound, consensus
+    ], axis=1)
 
     # 删除缺失比例 > 50% 的因子
     max_missing = config["factors"]["processing"]["max_missing_ratio"]

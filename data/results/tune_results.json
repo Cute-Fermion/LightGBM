@@ -1,0 +1,19 @@
+{
+  "best_icir": 0.8908500210705248,
+  "best_ic_mean": 0.06741720757729537,
+  "best_ic_std": 0.07567739348120668,
+  "best_params": {
+    "num_leaves": 44,
+    "max_depth": 3,
+    "min_child_samples": 70,
+    "learning_rate": 0.10382080465892038,
+    "n_estimators": 500,
+    "subsample": 0.7784451997275863,
+    "colsample_bytree": 0.4239890125404414,
+    "reg_lambda": 5.388279604638225,
+    "reg_alpha": 1.0310329894990735
+  },
+  "n_trials": 50,
+  "n_windows": 29,
+  "seed": 42
+}
